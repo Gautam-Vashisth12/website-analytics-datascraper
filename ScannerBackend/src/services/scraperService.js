@@ -23,9 +23,20 @@ function getRedirectCount(response) {
 async function scrapeWebsite(url, options = {}) {
   const timeout = options.timeout || 15000;
   const maxRetries = options.retries ?? 1;
-  const browser = await chromium.launch({ headless: true });
+  let browser;
 
   try {
+    browser = await chromium.launch({
+      headless: true,
+      args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--single-process",
+      "--no-zygote",
+    ],
+    });
+
     let lastError = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
@@ -162,8 +173,13 @@ async function scrapeWebsite(url, options = {}) {
       timeout,
       attempts: maxRetries + 1,
     });
+  } catch (error) {
+    console.error("SCRAPER ERROR:", error);
+    throw error;
   } finally {
-    await browser.close();
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
