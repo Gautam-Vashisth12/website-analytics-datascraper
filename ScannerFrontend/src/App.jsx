@@ -1,10 +1,50 @@
+import { useState } from 'react';
+
 import Grainient from './components/Grainient';
 import Navbar from './components/Navbar';
+import ScanResults from './components/results/ScanResults';
 import SearchBar from './components/SearchBar';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3000';
+
 function App() {
+  const [scanResult, setScanResult] = useState(null);
+  const [error, setError] = useState('');
+  const [isScanning, setIsScanning] = useState(false);
+
+  async function scanWebsite(url) {
+    setIsScanning(true);
+    setError('');
+    setScanResult(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/scan`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url }),
+      });
+
+      const payload = await response.json().catch(() => ({
+        success: false,
+        message: 'Unexpected response from scanner.',
+      }));
+
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error?.message || payload.message || 'Scan failed');
+      }
+
+      setScanResult(payload);
+    } catch (scanError) {
+      setError(scanError.message || 'Unable to scan this website right now.');
+    } finally {
+      setIsScanning(false);
+    }
+  }
+
   return (
-    <div style={{ width: '100vw', height: '100vh', position: 'relative' }}>
+    <div className="relative h-screen w-screen overflow-hidden">
 
 
       <Grainient
@@ -35,8 +75,12 @@ function App() {
 
       <Navbar />
 
-      <div className="absolute inset-0 flex items-center justify-center z-40">
-        <SearchBar />
+      <div className="absolute inset-0 z-40 overflow-y-auto px-6 pb-10 pt-32">
+        <main className="mx-auto flex min-h-full w-full max-w-6xl flex-col items-center justify-center gap-6">
+          <SearchBar onSubmit={scanWebsite} isScanning={isScanning} />
+
+          <ScanResults result={scanResult} isScanning={isScanning} error={error} />
+        </main>
       </div>
 
     </div>
