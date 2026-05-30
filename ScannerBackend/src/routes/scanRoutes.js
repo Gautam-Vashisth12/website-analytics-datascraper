@@ -104,7 +104,15 @@ router.post("/", async (req, res) => {
       data: compatibilityData,
     });
   } catch (error) {
-    console.error(error);
+      console.error("FULL SCAN ERROR:");
+      console.error(error);
+      console.error(error.stack);
+
+      return res.status(500).json({
+        success: false,
+        message: error.message || "Scan failed",
+    });
+  }
 
     if (error instanceof ScrapeError) {
       return res.status(504).json({

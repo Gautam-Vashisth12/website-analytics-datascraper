@@ -175,6 +175,9 @@ async function scrapeWebsite(url, options = {}) {
     });
   } catch (error) {
     console.error("SCRAPER ERROR:", error);
+    console.error("SCRAPER ERROR:");
+    console.error(error);
+    console.error(error.stack);
     throw error;
   } finally {
     if (browser) {
