@@ -104,15 +104,9 @@ router.post("/", async (req, res) => {
       data: compatibilityData,
     });
   } catch (error) {
-      console.error("FULL SCAN ERROR:");
-      console.error(error);
-      console.error(error.stack);
-
-      return res.status(500).json({
-        success: false,
-        message: error.message || "Scan failed",
-    });
-  }
+    console.error("FULL SCAN ERROR:");
+    console.error(error);
+    console.error(error.stack);
 
     if (error instanceof ScrapeError) {
       return res.status(504).json({
@@ -126,15 +120,14 @@ router.post("/", async (req, res) => {
       });
     }
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
-      message: "Scan failed",
+      message: error.message || "Scan failed",
       error: {
         code: "INTERNAL_ERROR",
-        message: "Scan failed",
+        message: error.message || "Scan failed",
       },
     });
   }
 });
-
 module.exports = router;
