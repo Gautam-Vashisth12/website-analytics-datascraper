@@ -85,6 +85,7 @@ router.post("/", async (req, res) => {
       headers: {
         h1: seo.h1Texts[0] || null,
       },
+      securityDebug: rawData.securityDebug,
       securityHeaders: {
         csp: security.csp,
         xFrame: security.xFrame,
@@ -101,6 +102,7 @@ router.post("/", async (req, res) => {
       technologies,
       risks,
       scores,
+      securityDebug: rawData.securityDebug,
       data: compatibilityData,
     });
   } catch (error) {

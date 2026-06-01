@@ -20,6 +20,12 @@ function getRedirectCount(response) {
   return count;
 }
 
+function normalizeHeaders(headers = {}) {
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value])
+  );
+}
+
 async function scrapeWebsite(url, options = {}) {
   const timeout = options.timeout || 15000;
   const maxRetries = options.retries ?? 1;
@@ -32,26 +38,62 @@ async function scrapeWebsite(url, options = {}) {
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
-      "--single-process",
-      "--no-zygote",
     ],
     });
 
     let lastError = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-      const page = await browser.newPage();
+      let page;
+      const documentResponses = [];
 
       try {
+        page = await browser.newPage();
+
+        page.on("response", async (response) => {
+          try {
+            const request = response.request();
+            if (
+              request.resourceType() === "document" &&
+              request.frame() === page.mainFrame()
+            ) {
+              documentResponses.push({
+                url: response.url(),
+                status: response.status(),
+                headers: normalizeHeaders(response.headers()),
+              });
+            }
+          } catch (err) {
+            console.error("Response capture error:", err);
+          }
+        });
+
         const start = Date.now();
         const response = await page.goto(url, {
           waitUntil: "domcontentloaded",
           timeout,
         });
         const loadTime = Date.now() - start;
-        const responseHeaders = response ? response.headers() : {};
+        const responseHeaders = response ? normalizeHeaders(response.headers()) : {};
         const status = response ? response.status() : null;
-        const redirectCount = getRedirectCount(response);
+        const firstDocumentResponse = documentResponses[0] || null;
+        const finalDocumentResponse =
+          documentResponses[documentResponses.length - 1] || null;
+        const finalHeaders = finalDocumentResponse?.headers || responseHeaders;
+        const redirectChain = documentResponses.slice(0, -1).map((documentResponse) => ({
+          url: documentResponse.url,
+          status: documentResponse.status,
+          headers: documentResponse.headers,
+        }));
+        const redirectCount = redirectChain.length || getRedirectCount(response);
+        const headersFound = Object.keys(finalHeaders);
+        const headersSeen = Array.from(
+          new Set(
+            (documentResponses.length ? documentResponses : [{ headers: finalHeaders }]).flatMap(
+              (documentResponse) => Object.keys(documentResponse.headers || {})
+            )
+          )
+        );
 
         const pageData = await page.evaluate(() => {
           const getAbsoluteUrl = (value) => {
@@ -99,6 +141,7 @@ async function scrapeWebsite(url, options = {}) {
           const metaTags = Array.from(document.querySelectorAll("meta")).map((meta) => ({
             name: meta.getAttribute("name"),
             property: meta.getAttribute("property"),
+            httpEquiv: meta.getAttribute("http-equiv"),
             content: meta.getAttribute("content"),
           }));
 
@@ -158,13 +201,24 @@ async function scrapeWebsite(url, options = {}) {
           loadTime,
           status,
           redirectCount,
-          headers: responseHeaders,
+          headers: finalHeaders,
+          documentResponses,
+          firstDocumentResponse,
+          finalDocumentResponse,
+          finalHeaders,
+          redirectChain,
+          securityDebug: {
+            documentResponseCount: documentResponses.length,
+            responseUrls: documentResponses.map((documentResponse) => documentResponse.url),
+            headersFound,
+            headersSeen,
+          },
           scrapeAttempts: attempt + 1,
           ...pageData,
         };
       } catch (error) {
         lastError = error;
-        await page.close().catch(() => {});
+        await page?.close().catch(() => {});
       }
     }
 
