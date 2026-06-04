@@ -1,5 +1,6 @@
 const CATEGORY_KEYS = {
   framework: "frameworks",
+  uiFramework: "uiFrameworks",
   cms: "cms",
   infrastructure: "infrastructure",
   analytics: "analytics",
@@ -25,21 +26,26 @@ function getMetaGenerator(rawData) {
 
 function createSources(rawData) {
   const scripts = rawData.scripts || [];
+  const stylesheets = rawData.stylesheets || [];
   const metaTags = rawData.metaTags || [];
   const scriptUrls = scripts.map((script) => script.src).join(" ");
   const scriptContent = scripts.map((script) => script.content).join(" ");
+  const stylesheetUrls = stylesheets.map((stylesheet) => stylesheet.href).join(" ");
   const metaText = metaTags
     .map((meta) => `${meta.name || ""} ${meta.property || ""} ${meta.content || ""}`)
     .join(" ");
   const headers = JSON.stringify(rawData.headers || {});
+  const classNames = [...new Set(rawData.classNames || [])];
 
   return {
     scriptUrls,
     scriptContent,
+    stylesheetUrls,
+    classNames,
     metaText,
     headers,
     html: rawData.html || "",
-    allText: `${scriptUrls} ${scriptContent} ${metaText} ${headers} ${rawData.html || ""}`,
+    allText: `${scriptUrls} ${scriptContent} ${stylesheetUrls} ${metaText} ${headers} ${rawData.html || ""}`,
     generator: getMetaGenerator(rawData),
     globals: rawData.windowGlobals || {},
   };
@@ -91,6 +97,117 @@ function calculateRuleConfidence(rule, evidence) {
   }
 
   return confidence;
+}
+
+function matchesUrlFilename(urls, filenames) {
+  return filenames.some((filename) => {
+    const escapedFilename = filename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?:^|/)${escapedFilename}(?:[?#]|\\s|$)`, "i").test(urls);
+  });
+}
+
+function hasTailwindStylesheet(sources) {
+  return matchesUrlFilename(sources.stylesheetUrls, [
+    "tailwind.css",
+    "tailwind.min.css",
+  ]);
+}
+
+function hasBootstrapAsset(sources) {
+  return (
+    matchesUrlFilename(sources.stylesheetUrls, [
+      "bootstrap.css",
+      "bootstrap.min.css",
+    ]) ||
+    matchesUrlFilename(sources.scriptUrls, [
+      "bootstrap.bundle.js",
+      "bootstrap.bundle.min.js",
+    ])
+  );
+}
+
+function getTailwindUtilityClasses(classNames) {
+  const utilityPattern =
+    /^(?:flex|grid|items-center|justify-center|(?:gap|space-x|space-y|bg|text|rounded|px|py|mx|my|w|h)-.+)$/;
+
+  return classNames.filter((className) =>
+    utilityPattern.test(className.split(":").pop())
+  );
+}
+
+function getTailwindResponsivePrefixes(classNames) {
+  return ["sm", "md", "lg", "xl", "2xl"].filter((prefix) =>
+    classNames.some((className) => className.startsWith(`${prefix}:`))
+  );
+}
+
+function getBootstrapClasses(classNames) {
+  const bootstrapClassPattern =
+    /^(?:container|container-fluid|row|btn|btn-primary|btn-secondary|navbar|modal|alert|card|col-(?:auto|\d+|(?:sm|md|lg|xl|xxl)(?:-(?:auto|\d+))?)|navbar-expand(?:-.+)?)$/;
+
+  return classNames.filter((className) => bootstrapClassPattern.test(className));
+}
+
+function hasBootstrapSpecificClass(classNames) {
+  return classNames.some((className) =>
+    /^(?:container-fluid|col-(?:auto|\d+|(?:sm|md|lg|xl|xxl)(?:-(?:auto|\d+))?)|btn-primary|btn-secondary|navbar-expand(?:-.+)?)$/.test(className)
+  );
+}
+
+function getMuiClasses(classNames) {
+  return classNames.filter((className) =>
+    /^Mui(?:Button|Typography|Container|Box|Paper|Grid)-root(?:-.+)?$/.test(className)
+  );
+}
+
+function hasMuiSupportingSignal(sources) {
+  return (
+    includesAny(`${sources.stylesheetUrls} ${sources.scriptUrls}`, [
+      "material-ui",
+      "@mui",
+      "/mui",
+      "mui.",
+      "mui-",
+    ]) ||
+    /\bdata-mui(?:-[\w-]+)?(?:=|\s|>)/i.test(sources.html) ||
+    includesAny(sources.html, ["data-emotion", "emotion-cache", "createcache"]) ||
+    /<style[^>]+(?:data-emotion|id)=(["'])[^"']*mui[^"']*\1/i.test(sources.html)
+  );
+}
+
+function hasGoogleAnalyticsMeasurementId(source) {
+  return /\b(?:G-[A-Z0-9]{10}|UA-\d+(?:-\d+)+)\b/.test(source);
+}
+
+function hasGoogleTagManagerContainerId(source) {
+  return /\bGTM-[A-Z0-9]+\b/i.test(source);
+}
+
+function hasFbqInitCall(source) {
+  return /\bfbq\s*\(\s*["']init["']/i.test(source);
+}
+
+function hasGoogleAnalyticsContext(sources) {
+  return (
+    includesAny(sources.scriptUrls, [
+      "googletagmanager.com/gtag/js",
+      "google-analytics.com",
+    ]) ||
+    hasGoogleAnalyticsMeasurementId(sources.allText) ||
+    sources.globals.hasGtag ||
+    sources.globals.hasGoogleAnalytics
+  );
+}
+
+function hasGoogleTagManagerContext(sources) {
+  return (
+    includesAny(sources.scriptUrls, ["googletagmanager.com/gtm.js"]) ||
+    hasGoogleTagManagerContainerId(sources.allText) ||
+    /<noscript[\s\S]*?googletagmanager\.com\/ns\.html/i.test(sources.html) ||
+    sources.globals.hasGoogleTagManagerGlobal ||
+    (!Object.prototype.hasOwnProperty.call(sources.globals, "hasDataLayer") &&
+      sources.globals.hasGoogleTagManager)
+  );
 }
 
 const detectionRules = [
@@ -282,6 +399,131 @@ const detectionRules = [
     ],
   },
   {
+    key: "tailwind",
+    name: "Tailwind CSS",
+    category: "uiFramework",
+    calculateConfidence: (sources) => {
+      if (hasTailwindStylesheet(sources)) {
+        return calculateConfidence(3);
+      }
+
+      const utilityCount = getTailwindUtilityClasses(sources.classNames).length;
+
+      if (utilityCount >= 10) {
+        return calculateConfidence(3);
+      }
+
+      if (utilityCount >= 5) {
+        return calculateConfidence(2);
+      }
+
+      return calculateConfidence(1);
+    },
+    checks: [
+      (sources) =>
+        hasTailwindStylesheet(sources) ? "Tailwind stylesheet" : null,
+      (sources) => {
+        const utilityCount = getTailwindUtilityClasses(sources.classNames).length;
+        const responsivePrefixes = getTailwindResponsivePrefixes(sources.classNames);
+        return utilityCount >= 2 &&
+          (!hasBootstrapAsset(sources) || responsivePrefixes.length > 0)
+          ? `${utilityCount} Tailwind utility classes detected`
+          : null;
+      },
+      (sources) => {
+        const prefixes = getTailwindResponsivePrefixes(sources.classNames);
+        return (
+          getTailwindUtilityClasses(sources.classNames).length >= 2 &&
+          prefixes.length > 0
+        )
+          ? `${prefixes.join(", ")}:* responsive utilities`
+          : null;
+      },
+    ],
+  },
+  {
+    key: "bootstrap",
+    name: "Bootstrap",
+    category: "uiFramework",
+    calculateConfidence: (sources) => {
+      if (hasBootstrapAsset(sources)) {
+        return calculateConfidence(3);
+      }
+
+      return calculateConfidence(
+        getBootstrapClasses(sources.classNames).length >= 3 ? 2 : 1
+      );
+    },
+    checks: [
+      (sources) =>
+        matchesUrlFilename(sources.stylesheetUrls, [
+          "bootstrap.css",
+          "bootstrap.min.css",
+        ])
+          ? "Bootstrap stylesheet"
+          : null,
+      (sources) =>
+        matchesUrlFilename(sources.scriptUrls, [
+          "bootstrap.bundle.js",
+          "bootstrap.bundle.min.js",
+        ])
+          ? "Bootstrap bundle script"
+          : null,
+      (sources) => {
+        const classCount = getBootstrapClasses(sources.classNames).length;
+        return classCount > 0 && hasBootstrapSpecificClass(sources.classNames)
+          ? `${classCount} Bootstrap classes detected`
+          : null;
+      },
+    ],
+  },
+  {
+    key: "mui",
+    name: "Material UI",
+    category: "uiFramework",
+    calculateConfidence: (sources) => {
+      const muiClassCount = getMuiClasses(sources.classNames).length;
+
+      if (muiClassCount >= 2) {
+        return calculateConfidence(3);
+      }
+
+      if (muiClassCount === 1 && hasMuiSupportingSignal(sources)) {
+        return calculateConfidence(2);
+      }
+
+      return calculateConfidence(1);
+    },
+    checks: [
+      (sources) => {
+        const classCount = getMuiClasses(sources.classNames).length;
+        return classCount > 0 ? `${classCount} Mui* classes detected` : null;
+      },
+      (sources) =>
+        includesAny(`${sources.stylesheetUrls} ${sources.scriptUrls}`, [
+          "material-ui",
+          "@mui",
+          "/mui",
+          "mui.",
+          "mui-",
+        ])
+          ? "MUI asset reference"
+          : null,
+      (sources) =>
+        /\bdata-mui(?:-[\w-]+)?(?:=|\s|>)/i.test(sources.html)
+          ? "data-mui attribute"
+          : null,
+      (sources) =>
+        includesAny(sources.html, ["data-emotion", "emotion-cache", "createcache"])
+          ? "Emotion cache reference"
+          : null,
+      (sources) =>
+        /<style[^>]+(?:data-emotion|id)=(["'])[^"']*mui[^"']*\1/i.test(sources.html)
+          ? "MUI style tag"
+          : null,
+    ],
+  },
+  {
     key: "wordpress",
     name: "WordPress",
     category: "cms",
@@ -369,18 +611,41 @@ const detectionRules = [
     key: "googleAnalytics",
     name: "Google Analytics",
     category: "analytics",
+    calculateConfidence: (sources, evidence) => {
+      if (
+        (evidence.includes("gtag.js loaded") ||
+          evidence.includes("Google Analytics script loaded")) &&
+        evidence.includes("GA measurement ID detected")
+      ) {
+        return calculateConfidence(3);
+      }
+
+      return calculateConfidence(evidence.length);
+    },
     checks: [
       (sources) =>
-        sources.globals.hasGoogleAnalytics
-          ? "Google Analytics global function was present"
+        includesAny(sources.scriptUrls, ["googletagmanager.com/gtag/js"])
+          ? "gtag.js loaded"
           : null,
       (sources) =>
-        includesAny(sources.allText, [
-          "google-analytics.com/analytics.js",
-          "googletagmanager.com/gtag/js",
-          "gtag(",
-        ])
-          ? "Google Analytics script or function call was found"
+        includesAny(sources.scriptUrls, ["google-analytics.com"])
+          ? "Google Analytics script loaded"
+          : null,
+      (sources) =>
+        hasGoogleAnalyticsMeasurementId(sources.allText)
+          ? "GA measurement ID detected"
+          : null,
+      (sources) =>
+        sources.globals.hasGtag
+          ? "gtag global detected"
+          : null,
+      (sources) =>
+        !sources.globals.hasGtag && sources.globals.hasGoogleAnalytics
+          ? "Google Analytics global detected"
+          : null,
+      (sources) =>
+        sources.globals.hasDataLayer && hasGoogleAnalyticsContext(sources)
+          ? "dataLayer present"
           : null,
     ],
   },
@@ -388,14 +653,29 @@ const detectionRules = [
     key: "googleTagManager",
     name: "Google Tag Manager",
     category: "analytics",
+    calculateConfidence: (sources, evidence) => calculateConfidence(evidence.length),
     checks: [
       (sources) =>
-        sources.globals.hasGoogleTagManager
-          ? "Google Tag Manager global or dataLayer was present"
+        includesAny(sources.scriptUrls, ["googletagmanager.com/gtm.js"])
+          ? "GTM script loaded"
           : null,
       (sources) =>
-        includesAny(sources.allText, ["googletagmanager.com/gtm.js", "gtm-"])
-          ? "Google Tag Manager script or container id was found"
+        hasGoogleTagManagerContainerId(sources.allText)
+          ? "GTM container detected"
+          : null,
+      (sources) =>
+        sources.globals.hasDataLayer && hasGoogleTagManagerContext(sources)
+          ? "dataLayer found"
+          : null,
+      (sources) =>
+        sources.globals.hasGoogleTagManagerGlobal ||
+        (!Object.prototype.hasOwnProperty.call(sources.globals, "hasDataLayer") &&
+          sources.globals.hasGoogleTagManager)
+          ? "Google Tag Manager global detected"
+          : null,
+      (sources) =>
+        /<noscript[\s\S]*?googletagmanager\.com\/ns\.html/i.test(sources.html)
+          ? "GTM noscript iframe detected"
           : null,
     ],
   },
@@ -403,11 +683,19 @@ const detectionRules = [
     key: "metaPixel",
     name: "Meta Pixel",
     category: "analytics",
+    calculateConfidence: (sources, evidence) => calculateConfidence(evidence.length),
     checks: [
-      (sources) => (sources.globals.hasMetaPixel ? "Meta Pixel fbq global was present" : null),
       (sources) =>
-        includesAny(sources.allText, ["connect.facebook.net", "fbevents.js", "fbq("])
-          ? "Meta Pixel script or fbq call was found"
+        includesAny(sources.scriptUrls, ["connect.facebook.net"])
+          ? "Facebook tracking script"
+          : null,
+      (sources) =>
+        sources.globals.hasFbq || sources.globals.hasMetaPixel
+          ? "fbq global detected"
+          : null,
+      (sources) =>
+        hasFbqInitCall(sources.allText)
+          ? "fbq init call detected"
           : null,
     ],
   },
@@ -415,11 +703,49 @@ const detectionRules = [
     key: "hotjar",
     name: "Hotjar",
     category: "analytics",
+    calculateConfidence: (sources, evidence) => calculateConfidence(evidence.length),
     checks: [
-      (sources) => (sources.globals.hasHotjar ? "Hotjar global was present" : null),
       (sources) =>
-        includesAny(sources.allText, ["static.hotjar.com", "hotjar.com", "hj("])
-          ? "Hotjar script or function call was found"
+        includesAny(sources.scriptUrls, ["hotjar.com", "static.hotjar.com"])
+          ? "Hotjar script"
+          : null,
+      (sources) =>
+        sources.globals.hasHj
+          ? "hj global detected"
+          : null,
+      (sources) =>
+        sources.globals.hasHjSettings
+          ? "hjSettings detected"
+          : null,
+      (sources) =>
+        !sources.globals.hasHj &&
+        !sources.globals.hasHjSettings &&
+        sources.globals.hasHotjar
+          ? "Hotjar global detected"
+          : null,
+    ],
+  },
+  {
+    key: "linkedInInsight",
+    name: "LinkedIn Insight Tag",
+    category: "analytics",
+    calculateConfidence: (sources, evidence) => calculateConfidence(evidence.length),
+    checks: [
+      (sources) =>
+        includesAny(sources.scriptUrls, ["snap.licdn.com"])
+          ? "LinkedIn Insight script"
+          : null,
+      (sources) =>
+        sources.globals.hasLinkedInPartnerId
+          ? "_linkedin_partner_id detected"
+          : null,
+      (sources) =>
+        sources.globals.hasLinkedInDataPartnerIds
+          ? "_linkedin_data_partner_ids detected"
+          : null,
+      (sources) =>
+        sources.globals.hasLintrk
+          ? "lintrk global detected"
           : null,
     ],
   },
@@ -433,8 +759,21 @@ function analyzeTechnologies(rawData) {
     vue: [],
     angular: [],
   };
+  const uiFrameworkSignals = {
+    tailwind: [],
+    bootstrap: [],
+    mui: [],
+  };
+  const analyticsSignals = {
+    googleAnalytics: [],
+    googleTagManager: [],
+    metaPixel: [],
+    hotjar: [],
+    linkedInInsight: [],
+  };
   const result = {
     frameworks: [],
+    uiFrameworks: [],
     cms: [],
     infrastructure: [],
     analytics: [],
@@ -454,12 +793,22 @@ function analyzeTechnologies(rawData) {
       frameworkSignals[debugKey] = evidence;
     }
 
+    if (rule.category === "uiFramework") {
+      uiFrameworkSignals[rule.key] = evidence;
+    }
+
+    if (rule.category === "analytics") {
+      analyticsSignals[rule.key] = evidence;
+    }
+
     result[categoryKey].push({
       key: rule.key,
       name: rule.name,
       category: rule.category,
       confidence:
-        rule.category === "framework"
+        rule.calculateConfidence
+          ? rule.calculateConfidence(sources, evidence)
+          : rule.category === "framework"
           ? calculateRuleConfidence(rule, evidence)
           : confidenceFromEvidence(evidence.length),
       evidence,
@@ -469,6 +818,7 @@ function analyzeTechnologies(rawData) {
 
   const technologies = [
     ...result.frameworks,
+    ...result.uiFrameworks,
     ...result.cms,
     ...result.infrastructure,
     ...result.analytics,
@@ -483,6 +833,8 @@ function analyzeTechnologies(rawData) {
     names: technologies.map((technology) => technology.name),
     technologyDebug: {
       frameworkSignals,
+      uiFrameworkSignals,
+      analyticsSignals,
     },
   };
 }

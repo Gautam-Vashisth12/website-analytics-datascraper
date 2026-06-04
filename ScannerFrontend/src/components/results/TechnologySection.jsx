@@ -2,13 +2,14 @@ import TechnologyBadge from "./TechnologyBadge";
 
 const categoryLabels = {
   frameworks: "Frameworks",
+  uiFrameworks: "CSS / UI Frameworks",
   cms: "CMS / Platforms",
   infrastructure: "Infrastructure",
   analytics: "Analytics / Marketing",
 };
 
 function TechnologySection({ technologies = {} }) {
-  const groups = ["frameworks", "cms", "infrastructure", "analytics"];
+  const groups = ["frameworks", "uiFrameworks", "cms", "infrastructure", "analytics"];
   const totalDetected = groups.reduce(
     (count, group) => count + (technologies[group]?.length || 0),
     0

@@ -121,7 +121,7 @@ async function scrapeWebsite(url, options = {}) {
 
           const scripts = Array.from(document.querySelectorAll("script")).map((script) => ({
             src: getAbsoluteUrl(script.getAttribute("src")),
-            content: script.innerText.slice(0, 500),
+            content: (script.innerText || script.textContent || "").slice(0, 500),
             async: script.async,
             defer: script.defer,
             type: script.type || null,
@@ -132,6 +132,13 @@ async function scrapeWebsite(url, options = {}) {
           ).map((stylesheet) => ({
             href: getAbsoluteUrl(stylesheet.getAttribute("href")),
           }));
+          const classNames = Array.from(
+            new Set(
+              Array.from(document.querySelectorAll("[class]")).flatMap((element) =>
+                Array.from(element.classList)
+              )
+            )
+          );
 
           const iframes = Array.from(document.querySelectorAll("iframe")).map((iframe) => ({
             src: getAbsoluteUrl(iframe.getAttribute("src")),
@@ -168,10 +175,19 @@ async function scrapeWebsite(url, options = {}) {
               Boolean(window.angular) ||
               Boolean(window.getAllAngularRootElements) ||
               Boolean(document.querySelector("[ng-version]")),
+            hasGtag: Boolean(window.gtag),
+            hasDataLayer: Boolean(window.dataLayer),
+            hasGoogleTagManagerGlobal: Boolean(window.google_tag_manager),
             hasGoogleTagManager: Boolean(window.google_tag_manager || window.dataLayer),
             hasGoogleAnalytics: Boolean(window.ga || window.gtag),
+            hasFbq: Boolean(window.fbq),
             hasMetaPixel: Boolean(window.fbq),
+            hasHj: Boolean(window.hj),
+            hasHjSettings: Boolean(window.hjSettings || window._hjSettings),
             hasHotjar: Boolean(window.hj || window._hjSettings),
+            hasLinkedInPartnerId: Boolean(window._linkedin_partner_id),
+            hasLinkedInDataPartnerIds: Boolean(window._linkedin_data_partner_ids),
+            hasLintrk: Boolean(window.lintrk),
             hasShopify: Boolean(window.Shopify),
           };
 
@@ -186,6 +202,7 @@ async function scrapeWebsite(url, options = {}) {
             links,
             scripts,
             stylesheets,
+            classNames,
             iframes,
             metaTags,
             forms,

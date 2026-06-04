@@ -38,10 +38,13 @@ function SummaryTile({ icon: Icon, label, value, helper }) {
 }
 
 function OverviewSummary({ overview = {}, scores = {}, technologies = {} }) {
-  const technologyCount = ["frameworks", "cms", "infrastructure", "analytics"].reduce(
-    (total, group) => total + (technologies[group]?.length || 0),
-    0
-  );
+  const technologyCount = [
+    "frameworks",
+    "uiFrameworks",
+    "cms",
+    "infrastructure",
+    "analytics",
+  ].reduce((total, group) => total + (technologies[group]?.length || 0), 0);
   const overallScore = scores.overallScore ?? overview.overallScore;
 
   return (
