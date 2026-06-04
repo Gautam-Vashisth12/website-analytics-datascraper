@@ -162,6 +162,8 @@ async function scrapeWebsite(url, options = {}) {
             hasReactDevToolsHook: Boolean(window.__REACT_DEVTOOLS_GLOBAL_HOOK__),
             hasNextData: Boolean(window.__NEXT_DATA__),
             hasVue: Boolean(window.Vue || window.__VUE__),
+            hasVueDevToolsHook: Boolean(window.__VUE_DEVTOOLS_GLOBAL_HOOK__),
+            hasNg: Boolean(window.ng),
             hasAngular:
               Boolean(window.angular) ||
               Boolean(window.getAllAngularRootElements) ||

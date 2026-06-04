@@ -75,6 +75,7 @@ router.post("/", async (req, res) => {
       security,
       performance,
       technologies,
+      technologyDebug: technologies.technologyDebug,
 
       // Compatibility fields for the current frontend.
       title: seo.title,
@@ -103,6 +104,7 @@ router.post("/", async (req, res) => {
       risks,
       scores,
       securityDebug: rawData.securityDebug,
+      technologyDebug: technologies.technologyDebug,
       data: compatibilityData,
     });
   } catch (error) {

@@ -16,7 +16,7 @@ function includesAny(source, patterns) {
 }
 
 function getMetaGenerator(rawData) {
-  const generator = rawData.metaTags.find(
+  const generator = (rawData.metaTags || []).find(
     (meta) => normalize(meta.name) === "generator"
   );
 
@@ -24,9 +24,11 @@ function getMetaGenerator(rawData) {
 }
 
 function createSources(rawData) {
-  const scriptUrls = rawData.scripts.map((script) => script.src).join(" ");
-  const scriptContent = rawData.scripts.map((script) => script.content).join(" ");
-  const metaText = rawData.metaTags
+  const scripts = rawData.scripts || [];
+  const metaTags = rawData.metaTags || [];
+  const scriptUrls = scripts.map((script) => script.src).join(" ");
+  const scriptContent = scripts.map((script) => script.content).join(" ");
+  const metaText = metaTags
     .map((meta) => `${meta.name || ""} ${meta.property || ""} ${meta.content || ""}`)
     .join(" ");
   const headers = JSON.stringify(rawData.headers || {});
@@ -43,6 +45,18 @@ function createSources(rawData) {
   };
 }
 
+function calculateConfidence(signalCount) {
+  if (signalCount >= 3) {
+    return "high";
+  }
+
+  if (signalCount === 2) {
+    return "medium";
+  }
+
+  return "low";
+}
+
 function confidenceFromEvidence(evidenceCount) {
   if (evidenceCount >= 2) {
     return "high";
@@ -52,9 +66,31 @@ function confidenceFromEvidence(evidenceCount) {
 }
 
 function runChecks(checks, sources) {
-  return checks
-    .map((check) => check(sources))
-    .filter(Boolean);
+  return [...new Set(checks.map((check) => check(sources)).filter(Boolean))];
+}
+
+function calculateRuleConfidence(rule, evidence) {
+  const confidence = calculateConfidence(evidence.length);
+
+  if (
+    rule.highConfidenceSignals?.some((signal) => evidence.includes(signal)) ||
+    rule.highConfidenceSignalGroups?.some((signals) =>
+      signals.every((signal) => evidence.includes(signal))
+    ) ||
+    (rule.highConfidenceSignalCount &&
+      evidence.length >= rule.highConfidenceSignalCount)
+  ) {
+    return "high";
+  }
+
+  if (
+    confidence === "low" &&
+    rule.mediumConfidenceSignals?.some((signal) => evidence.includes(signal))
+  ) {
+    return "medium";
+  }
+
+  return confidence;
 }
 
 const detectionRules = [
@@ -62,20 +98,61 @@ const detectionRules = [
     key: "react",
     name: "React",
     category: "framework",
+    highConfidenceSignalCount: 2,
+    mediumConfidenceSignals: [
+      "__REACT_DEVTOOLS_GLOBAL_HOOK__",
+      "data-reactroot attribute",
+      "react.production.min.js",
+      "react-dom.production.min.js",
+      "react.development.js",
+      "react-dom.development.js",
+    ],
     checks: [
       // React devtools hook is a strong browser-global signal.
       (sources) =>
         sources.globals.hasReactDevToolsHook
-          ? "window.__REACT_DEVTOOLS_GLOBAL_HOOK__ was present"
+          ? "__REACT_DEVTOOLS_GLOBAL_HOOK__"
           : null,
       // React DOM markers reduce false positives from pages merely mentioning React.
       (sources) =>
-        includesAny(sources.html, ["reactroot", "__react", "data-reactroot"])
-          ? "React DOM marker was found"
+        includesAny(sources.html, ['id="root"', "id='root'"])
+          ? 'id="root"'
           : null,
       (sources) =>
-        includesAny(sources.scriptUrls, ["react", "react-dom"])
-          ? "React script URL was found"
+        includesAny(sources.html, ["data-reactroot"])
+          ? "data-reactroot attribute"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["react.production.min.js"])
+          ? "react.production.min.js"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["react-dom.production.min.js"])
+          ? "react-dom.production.min.js"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["react.development.js"])
+          ? "react.development.js"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["react-dom.development.js"])
+          ? "react-dom.development.js"
+          : null,
+      // Preserve the broader legacy React markers.
+      (sources) =>
+        includesAny(sources.html, ["reactroot", "__react"]) &&
+        !includesAny(sources.html, ["data-reactroot"])
+          ? "React DOM marker"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["react", "react-dom"]) &&
+        !includesAny(sources.scriptUrls, [
+          "react.production.min.js",
+          "react-dom.production.min.js",
+          "react.development.js",
+          "react-dom.development.js",
+        ])
+          ? "React script URL"
           : null,
     ],
   },
@@ -83,12 +160,37 @@ const detectionRules = [
     key: "nextjs",
     name: "Next.js",
     category: "framework",
+    highConfidenceSignals: ["__NEXT_DATA__"],
+    highConfidenceSignalGroups: [["/_next/static/", "/_next/image"]],
     checks: [
       // __NEXT_DATA__ is a direct Next.js runtime marker.
-      (sources) => (sources.globals.hasNextData ? "window.__NEXT_DATA__ was present" : null),
+      (sources) => (sources.globals.hasNextData ? "__NEXT_DATA__" : null),
       (sources) =>
-        includesAny(sources.allText, ["_next/static", "__next_data__"])
-          ? "Next.js asset or data marker was found"
+        includesAny(sources.html, ['id="__next"', "id='__next'"])
+          ? 'id="__next"'
+          : null,
+      (sources) =>
+        /<script[^>]+id=(["'])__next_data__\1/i.test(sources.html)
+          ? "script#__NEXT_DATA__"
+          : null,
+      (sources) =>
+        includesAny(sources.allText, ["/_next/static/"])
+          ? "/_next/static/"
+          : null,
+      (sources) =>
+        includesAny(sources.allText, ["/_next/image"])
+          ? "/_next/image"
+          : null,
+      (sources) =>
+        /"x-powered-by"\s*:\s*"[^"]*next\.js/i.test(sources.headers)
+          ? "x-powered-by: Next.js"
+          : null,
+      // Preserve the broader legacy Next.js marker.
+      (sources) =>
+        includesAny(sources.allText, ["_next/static", "__next_data__"]) &&
+        !includesAny(sources.allText, ["/_next/static/"]) &&
+        !/<script[^>]+id=(["'])__next_data__\1/i.test(sources.html)
+          ? "Next.js asset or data marker"
           : null,
     ],
   },
@@ -96,15 +198,39 @@ const detectionRules = [
     key: "vuejs",
     name: "Vue.js",
     category: "framework",
+    highConfidenceSignals: ["__VUE_DEVTOOLS_GLOBAL_HOOK__"],
+    highConfidenceSignalCount: 2,
     checks: [
-      (sources) => (sources.globals.hasVue ? "Vue global was present on window" : null),
+      (sources) => (sources.globals.hasVue ? "Vue global" : null),
       (sources) =>
-        includesAny(sources.html, ["data-v-", "__vue__"])
-          ? "Vue DOM marker was found"
+        sources.globals.hasVueDevToolsHook
+          ? "__VUE_DEVTOOLS_GLOBAL_HOOK__"
           : null,
       (sources) =>
-        includesAny(sources.scriptUrls, ["vue.js", "vue.runtime"])
-          ? "Vue script URL was found"
+        includesAny(sources.html, ["data-v-"])
+          ? "data-v-* attribute"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["vue.runtime"])
+          ? "vue.runtime script"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["vue.global"])
+          ? "vue.global script"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["vue.min.js"])
+          ? "vue.min.js"
+          : null,
+      // Preserve the broader legacy Vue markers.
+      (sources) =>
+        includesAny(sources.html, ["__vue__"])
+          ? "Vue DOM marker"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["vue.js", "vue.runtime"]) &&
+        !includesAny(sources.scriptUrls, ["vue.runtime", "vue.global", "vue.min.js"])
+          ? "Vue script URL"
           : null,
     ],
   },
@@ -112,12 +238,46 @@ const detectionRules = [
     key: "angular",
     name: "Angular",
     category: "framework",
+    highConfidenceSignals: ["ng-version attribute"],
+    highConfidenceSignalCount: 2,
     checks: [
+      (sources) => (sources.globals.hasNg ? "window.ng" : null),
       (sources) =>
-        sources.globals.hasAngular ? "Angular global or [ng-version] marker was present" : null,
+        includesAny(sources.html, ["ng-version"])
+          ? "ng-version attribute"
+          : null,
       (sources) =>
-        includesAny(sources.allText, ["ng-version", "angular.js", "@angular/"])
-          ? "Angular DOM or script pattern was found"
+        includesAny(sources.html, ["ng-app"])
+          ? "ng-app attribute"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["polyfills-es2015"])
+          ? "polyfills-es2015 script"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["main-es2015"])
+          ? "main-es2015 script"
+          : null,
+      (sources) =>
+        includesAny(sources.scriptUrls, ["runtime-es2015"])
+          ? "runtime-es2015 script"
+          : null,
+      // Preserve the broader legacy Angular markers.
+      (sources) =>
+        sources.globals.hasAngular &&
+        !sources.globals.hasNg &&
+        !includesAny(sources.html, ["ng-version"])
+          ? "Angular global or [ng-version] marker"
+          : null,
+      (sources) =>
+        includesAny(sources.allText, ["ng-version", "angular.js", "@angular/"]) &&
+        !includesAny(sources.html, ["ng-version"]) &&
+        !includesAny(sources.scriptUrls, [
+          "polyfills-es2015",
+          "main-es2015",
+          "runtime-es2015",
+        ])
+          ? "Angular DOM or script pattern"
           : null,
     ],
   },
@@ -267,6 +427,12 @@ const detectionRules = [
 
 function analyzeTechnologies(rawData) {
   const sources = createSources(rawData);
+  const frameworkSignals = {
+    react: [],
+    nextjs: [],
+    vue: [],
+    angular: [],
+  };
   const result = {
     frameworks: [],
     cms: [],
@@ -283,12 +449,20 @@ function analyzeTechnologies(rawData) {
 
     const categoryKey = CATEGORY_KEYS[rule.category];
 
+    if (rule.category === "framework") {
+      const debugKey = rule.key === "vuejs" ? "vue" : rule.key;
+      frameworkSignals[debugKey] = evidence;
+    }
+
     result[categoryKey].push({
       key: rule.key,
       name: rule.name,
       category: rule.category,
-      confidence: confidenceFromEvidence(evidence.length),
-      evidence: evidence.join("; "),
+      confidence:
+        rule.category === "framework"
+          ? calculateRuleConfidence(rule, evidence)
+          : confidenceFromEvidence(evidence.length),
+      evidence,
       evidenceSources: evidence,
     });
   });
@@ -307,9 +481,13 @@ function analyzeTechnologies(rawData) {
       return detected;
     }, {}),
     names: technologies.map((technology) => technology.name),
+    technologyDebug: {
+      frameworkSignals,
+    },
   };
 }
 
 module.exports = {
   analyzeTechnologies,
+  calculateConfidence,
 };
