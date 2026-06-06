@@ -24,6 +24,21 @@ function getMetaGenerator(rawData) {
   return generator?.content || "";
 }
 
+function getNormalizedHeaders(headers) {
+  return Object.fromEntries(
+    Object.entries(headers || {}).map(([key, value]) => {
+      const normalizedKey = normalize(key);
+      const normalizedValue = Array.isArray(value)
+        ? value.map((v) => (typeof v === "string" ? normalize(v) : v))
+        : typeof value === "string"
+        ? normalize(value)
+        : value;
+
+      return [normalizedKey, normalizedValue];
+    })
+  );
+}
+
 function createSources(rawData) {
   const scripts = rawData.scripts || [];
   const stylesheets = rawData.stylesheets || [];
@@ -34,7 +49,8 @@ function createSources(rawData) {
   const metaText = metaTags
     .map((meta) => `${meta.name || ""} ${meta.property || ""} ${meta.content || ""}`)
     .join(" ");
-  const headers = JSON.stringify(rawData.headers || {});
+  const normalizedHeaders = getNormalizedHeaders(rawData.headers);
+  const headerKeys = Object.keys(normalizedHeaders);
   const classNames = [...new Set(rawData.classNames || [])];
 
   return {
@@ -43,9 +59,10 @@ function createSources(rawData) {
     stylesheetUrls,
     classNames,
     metaText,
-    headers,
+    normalizedHeaders,
+    headerKeys,
     html: rawData.html || "",
-    allText: `${scriptUrls} ${scriptContent} ${stylesheetUrls} ${metaText} ${headers} ${rawData.html || ""}`,
+    allText: `${scriptUrls} ${scriptContent} ${stylesheetUrls} ${metaText} ${JSON.stringify(rawData.headers || {})} ${rawData.html || ""}`,
     generator: getMetaGenerator(rawData),
     globals: rawData.windowGlobals || {},
   };
@@ -299,7 +316,7 @@ const detectionRules = [
           ? "/_next/image"
           : null,
       (sources) =>
-        /"x-powered-by"\s*:\s*"[^"]*next\.js/i.test(sources.headers)
+        sources.normalizedHeaders["x-powered-by"]?.includes("next.js")
           ? "x-powered-by: Next.js"
           : null,
       // Preserve the broader legacy Next.js marker.
@@ -565,16 +582,72 @@ const detectionRules = [
     key: "cloudflare",
     name: "Cloudflare",
     category: "infrastructure",
+    calculateConfidence: (sources, evidence) => calculateConfidence(evidence.length),
     checks: [
-      // Cloudflare headers are stronger than HTML mentions and usually indicate real edge usage.
       (sources) =>
-        includesAny(sources.headers, ["cf-ray", "cf-cache-status", "server\":\"cloudflare"])
-          ? "Cloudflare response header marker was found"
-          : null,
+        sources.headerKeys.includes("cf-ray") ? "cf-ray header" : null,
       (sources) =>
-        includesAny(sources.allText, ["__cf_bm", "cloudflare"])
-          ? "Cloudflare script or HTML marker was found"
-          : null,
+        sources.headerKeys.includes("cf-cache-status") ? "cf-cache-status header" : null,
+      (sources) =>
+        includesAny(sources.allText, ["cloudflare"]) ? "cloudflare resource" : null,
+    ],
+  },
+  {
+    key: "aws",
+    name: "AWS",
+    category: "infrastructure",
+    calculateConfidence: (sources, evidence) => calculateConfidence(evidence.length),
+    checks: [
+      (sources) =>
+        sources.headerKeys.some((k) => k.startsWith("x-amz-")) ? "x-amz header" : null,
+      (sources) =>
+        includesAny(sources.allText, ["amazonaws.com"]) ? "amazonaws.com resource" : null,
+    ],
+  },
+  {
+    key: "cloudfront",
+    name: "CloudFront",
+    category: "infrastructure",
+    calculateConfidence: (sources, evidence) => calculateConfidence(evidence.length),
+    checks: [
+      (sources) =>
+        includesAny(sources.allText, ["cloudfront.net"]) ? "cloudfront.net asset" : null,
+      (sources) =>
+        sources.headerKeys.includes("x-cache") ? "x-cache header" : null,
+    ],
+  },
+  {
+    key: "fastly",
+    name: "Fastly",
+    category: "infrastructure",
+    calculateConfidence: (sources, evidence) => calculateConfidence(evidence.length),
+    checks: [
+      (sources) =>
+        sources.headerKeys.some((k) => k === "x-served-by" || k === "x-fastly-request-id") ? "Fastly response header" : null,
+    ],
+  },
+  {
+    key: "azure",
+    name: "Azure",
+    category: "infrastructure",
+    calculateConfidence: (sources, evidence) => calculateConfidence(evidence.length),
+    checks: [
+      (sources) =>
+        includesAny(sources.allText, ["azurewebsites.net"]) ? "azurewebsites.net resource" : null,
+      (sources) =>
+        sources.headerKeys.includes("x-azure-ref") ? "x-azure-ref header" : null,
+    ],
+  },
+  {
+    key: "gcp",
+    name: "Google Cloud Platform",
+    category: "infrastructure",
+    calculateConfidence: (sources, evidence) => calculateConfidence(evidence.length),
+    checks: [
+      (sources) =>
+        includesAny(sources.allText, ["googleusercontent.com", "storage.googleapis.com"]) ? "Google Cloud asset" : null,
+      (sources) =>
+        sources.headerKeys.some((k) => k.startsWith("x-goog-")) ? "x-goog header" : null,
     ],
   },
   {
@@ -583,7 +656,9 @@ const detectionRules = [
     category: "infrastructure",
     checks: [
       (sources) =>
-        includesAny(sources.headers, ["x-vercel-id", "x-vercel-cache", "server\":\"vercel"])
+        sources.headerKeys.includes("x-vercel-id") ||
+        sources.headerKeys.includes("x-vercel-cache") ||
+        sources.normalizedHeaders["server"]?.includes("vercel")
           ? "Vercel response header marker was found"
           : null,
       (sources) =>
@@ -598,7 +673,8 @@ const detectionRules = [
     category: "infrastructure",
     checks: [
       (sources) =>
-        includesAny(sources.headers, ["x-nf-request-id", "server\":\"netlify"])
+        sources.headerKeys.includes("x-nf-request-id") ||
+        sources.normalizedHeaders["server"]?.includes("netlify")
           ? "Netlify response header marker was found"
           : null,
       (sources) =>
@@ -771,6 +847,7 @@ function analyzeTechnologies(rawData) {
     hotjar: [],
     linkedInInsight: [],
   };
+  const infrastructureSignals = {};
   const result = {
     frameworks: [],
     uiFrameworks: [],
@@ -799,6 +876,13 @@ function analyzeTechnologies(rawData) {
 
     if (rule.category === "analytics") {
       analyticsSignals[rule.key] = evidence;
+    }
+
+    if (rule.category === "infrastructure") {
+      infrastructureSignals[rule.key] = {
+        matchedSignals: evidence,
+        rawCount: evidence.length,
+      };
     }
 
     result[categoryKey].push({
@@ -835,6 +919,7 @@ function analyzeTechnologies(rawData) {
       frameworkSignals,
       uiFrameworkSignals,
       analyticsSignals,
+      infrastructureSignals,
     },
   };
 }
