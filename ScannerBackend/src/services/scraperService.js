@@ -32,6 +32,8 @@ async function scrapeWebsite(url, options = {}) {
   let browser;
 
   try {
+    console.log("STEP 1");
+
     browser = await chromium.launch({
       headless: true,
       args: [
@@ -48,7 +50,11 @@ async function scrapeWebsite(url, options = {}) {
       const documentResponses = [];
 
       try {
+        console.log("STEP 2");
+
         page = await browser.newPage();
+
+        console.log("STEP 2.1: newPage successful");
 
         page.on("response", async (response) => {
           try {
@@ -69,10 +75,21 @@ async function scrapeWebsite(url, options = {}) {
         });
 
         const start = Date.now();
+        console.log("STEP 3");
+        console.log("URL:", url);
+        console.log("Timeout:", timeout);
+        console.log("Attempt:", attempt);
+
         const response = await page.goto(url, {
-          waitUntil: "domcontentloaded",
+          waitUntil: "commit",
           timeout,
+          
+
         });
+
+        console.log("STEP 4");
+
+
         const loadTime = Date.now() - start;
         const responseHeaders = response ? normalizeHeaders(response.headers()) : {};
         const status = response ? response.status() : null;
@@ -236,6 +253,12 @@ async function scrapeWebsite(url, options = {}) {
           ...pageData,
         };
       } catch (error) {
+        console.error("========== SCRAPE ATTEMPT FAILED ==========");
+        console.error("Attempt:", attempt);
+        console.error("URL:", url);
+        console.error("Timeout:", timeout);
+        console.error(error);
+        console.error(error.stack);
         lastError = error;
         await page?.close().catch(() => {});
       }
