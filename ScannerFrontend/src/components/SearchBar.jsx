@@ -22,13 +22,14 @@ function SearchBar({ onSubmit, isScanning }) {
     }
 
     try {
-      const parsedUrl = new URL(url);
-
-      if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-        throw new Error("Invalid protocol");
+      let testUrl = url;
+      if (!/^https?:\/\//i.test(url)) {
+        testUrl = `http://${url}`;
       }
+
+      new URL(testUrl); // Throws if the domain/URL format is completely invalid
     } catch {
-      setValidationError("Enter a valid http or https URL.");
+      setValidationError("Enter a valid website URL or domain.");
       return;
     }
 

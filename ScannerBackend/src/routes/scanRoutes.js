@@ -7,6 +7,7 @@ const { analyzeSecurity } = require("../services/analyzers/securityAnalyzer");
 const { analyzeTechnologies } = require("../services/analyzers/technologyAnalyzer");
 const { createRisks } = require("../services/riskEngine");
 const { calculateScanScores } = require("../services/scoreService");
+const { resolveUrl } = require("../services/urlResolver");
 
 const router = express.Router();
 
@@ -16,18 +17,9 @@ router.post("/", async (req, res) => {
 
   try {
     const { url } = req.body;
-    let parsedUrl;
-
-    try {
-      parsedUrl = new URL(url);
-    } catch {
-      parsedUrl = null;
-    }
-
     if (
       typeof url !== "string" ||
-      !parsedUrl ||
-      !["http:", "https:"].includes(parsedUrl.protocol)
+      !url.trim()
     ) {
       return res.status(400).json({
         success: false,
@@ -39,9 +31,23 @@ router.post("/", async (req, res) => {
       });
     }
 
-    console.log("Scanning:", url);
+    let resolution;
+    try {
+      resolution = await resolveUrl(url);
+    } catch (error) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        error: {
+          code: "UNREACHABLE_URL",
+          message: error.message,
+        },
+      });
+    }
 
-    const rawData = await scrapeWebsite(url);
+    console.log(`Original URL: ${resolution.userInput} -> Resolved: ${resolution.resolvedUrl}`);
+
+    const rawData = await scrapeWebsite(resolution.resolvedUrl);
     const seo = analyzeSEO(rawData);
     const security = analyzeSecurity(rawData);
     const performance = analyzePerformance(rawData);
@@ -60,6 +66,7 @@ router.post("/", async (req, res) => {
     const scanDuration = Date.now() - scanStartTime;
     const overview = {
       scannedUrl: url,
+      resolvedUrl: resolution.resolvedUrl,
       finalUrl: rawData.finalUrl,
       status: rawData.status,
       redirectCount: rawData.redirectCount,
