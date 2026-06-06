@@ -27,7 +27,7 @@ function normalizeHeaders(headers = {}) {
 }
 
 async function scrapeWebsite(url, options = {}) {
-  const timeout = options.timeout || 15000;
+  const timeout = options.timeout || 30000;
   const maxRetries = options.retries ?? 1;
   let browser;
 
