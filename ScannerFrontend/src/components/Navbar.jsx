@@ -14,20 +14,17 @@ function Navbar() {
         <div className="flex items-center gap-3">
 
           {/* LOGO */}
-
-          <video
-            className="h-12 w-12 object-contain flex-shrink-0"
+          <div className="h-12 w-12 rounded-full border border-gray-400/60 overflow-hidden flex items-center justify-center bg-black">
+            <video
+            className="h-full w-full object-cover scale-100 rounded-full"
             autoPlay
             muted
             loop
             playsInline
-            preload="auto"
           >
             <source src="/WebLogo.mp4" type="video/mp4" />
-            Your browser does not support the video tag.
-
-          </video>
-
+            </video>
+        </div>
           {/* BRAND NAME */}
           <h1 className="text-2xl font-semibold text-white">
             OmniaScanAI
