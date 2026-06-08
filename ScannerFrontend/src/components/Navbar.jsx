@@ -14,11 +14,23 @@ function Navbar() {
         <div className="flex items-center gap-3">
 
           {/* LOGO */}
-          <div className="h-10 w-10 rounded-full bg-white" />
+
+          <video
+            className="h-12 w-12 object-contain flex-shrink-0"
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+          >
+            <source src="/WebLogo.mp4" type="video/mp4" />
+            Your browser does not support the video tag.
+
+          </video>
 
           {/* BRAND NAME */}
           <h1 className="text-2xl font-semibold text-white">
-            YourLogo
+            OmniaScanAI
           </h1>
 
         </div>

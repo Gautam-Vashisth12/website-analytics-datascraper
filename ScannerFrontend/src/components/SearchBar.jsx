@@ -43,7 +43,7 @@ function SearchBar({ onSubmit, isScanning }) {
         <InputGroupInput
           name="url"
           type="text"
-          placeholder="https://yourwebsite.com"
+          placeholder="Enter a website (e.g. google.com)"
           className="px-4 text-base text-black placeholder:text-zinc-500"
           disabled={isScanning}
           aria-invalid={Boolean(validationError)}
