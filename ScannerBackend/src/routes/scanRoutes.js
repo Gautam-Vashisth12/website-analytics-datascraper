@@ -30,6 +30,7 @@ const router = express.Router();
 router.post("/", async (req, res) => {
   const scanStartedAt = new Date();
   const scanStartTime = Date.now();
+  const GLOBAL_TIMEOUT_MS = 25000;
 
   try {
     const { url } = req.body;
@@ -48,6 +49,7 @@ router.post("/", async (req, res) => {
     }
 
     let resolution;
+    const resolveStart = Date.now();
     try {
       resolution = await resolveUrl(url);
     } catch (error) {
@@ -60,63 +62,78 @@ router.post("/", async (req, res) => {
         },
       });
     }
-
+    console.log(`[SCAN] Stage: URL Resolution Duration: ${Date.now() - resolveStart}ms`);
     console.log(`Original URL: ${resolution.userInput} -> Resolved: ${resolution.resolvedUrl}`);
 
-    const rawData = await scrapeWebsite(resolution.resolvedUrl);
+    const timeRemainingAfterResolve = GLOBAL_TIMEOUT_MS - (Date.now() - scanStartTime);
+    if (timeRemainingAfterResolve <= 2000) {
+      throw new Error("Scan budget exhausted during URL resolution");
+    }
+
+    const rawData = await scrapeWebsite(resolution.resolvedUrl, {
+      timeout: timeRemainingAfterResolve,
+      retries: 0 // Retries set to 0 to respect the strict timeout budget
+    });
+    
     const warnings = [...(rawData.warnings || [])];
 
-    const seoResult = runAnalyzerSafely("SEO", () => analyzeSEO(rawData), {
-      hasTitle: false,
-      hasMetaDescription: false,
-      h1Count: 0,
-      imageAltCoverage: 0,
-      hasMultipleH1: false,
-      hasCanonical: false,
-      hasOpenGraph: false,
-      hasFavicon: false,
-      title: null,
-      description: null,
-      h1Texts: [],
-    });
+    const analysisStart = Date.now();
+    
+    // Run independent analyzers in parallel using Promise.all
+    const [seoResult, securityResult, performanceResult, technologyResult] = await Promise.all([
+      Promise.resolve(runAnalyzerSafely("SEO", () => analyzeSEO(rawData), {
+        hasTitle: false,
+        hasMetaDescription: false,
+        h1Count: 0,
+        imageAltCoverage: 0,
+        hasMultipleH1: false,
+        hasCanonical: false,
+        hasOpenGraph: false,
+        hasFavicon: false,
+        title: null,
+        description: null,
+        h1Texts: [],
+      })),
+      Promise.resolve(runAnalyzerSafely("Security", () => analyzeSecurity(rawData), {
+        usesHttps: false,
+        hasCsp: false,
+        hasXFrameOptions: false,
+        hasHsts: false,
+        hasContentTypeOptions: false,
+        insecureFormCount: 0,
+        mixedContentCount: 0,
+        suspiciousScriptCount: 0,
+        score: 0,
+        csp: null,
+        xFrame: null,
+        hsts: null,
+        contentTypeOptions: null,
+      })),
+      Promise.resolve(runAnalyzerSafely("Performance", () => analyzePerformance(rawData), {
+        loadTime: rawData.loadTime || 0,
+        imageCount: 0,
+        renderBlockingScriptCount: 0,
+        estimatedHeavyAssetUsage: false,
+        lazyLoadingCoverage: 0,
+        linkCount: 0,
+        score: 0,
+      })),
+      Promise.resolve(runAnalyzerSafely("Technology", () => analyzeTechnologies(rawData), {
+        technologies: [],
+        categories: {},
+        technologyDebug: {},
+      }))
+    ]);
+
     if (seoResult.warning) warnings.push(seoResult.warning);
     const seo = seoResult.data;
 
-    const securityResult = runAnalyzerSafely("Security", () => analyzeSecurity(rawData), {
-      usesHttps: false,
-      hasCsp: false,
-      hasXFrameOptions: false,
-      hasHsts: false,
-      hasContentTypeOptions: false,
-      insecureFormCount: 0,
-      mixedContentCount: 0,
-      suspiciousScriptCount: 0,
-      score: 0,
-      csp: null,
-      xFrame: null,
-      hsts: null,
-      contentTypeOptions: null,
-    });
     if (securityResult.warning) warnings.push(securityResult.warning);
     const security = securityResult.data;
 
-    const performanceResult = runAnalyzerSafely("Performance", () => analyzePerformance(rawData), {
-      loadTime: rawData.loadTime || 0,
-      imageCount: 0,
-      renderBlockingScriptCount: 0,
-      estimatedHeavyAssetUsage: false,
-      lazyLoadingCoverage: 0,
-      linkCount: 0,
-      score: 0,
-    });
     if (performanceResult.warning) warnings.push(performanceResult.warning);
     const performance = performanceResult.data;
 
-    const technologyResult = runAnalyzerSafely("Technology", () => analyzeTechnologies(rawData), {
-      technologies: [],
-      categories: {},
-      technologyDebug: {},
-    });
     if (technologyResult.warning) warnings.push(technologyResult.warning);
     const technologies = technologyResult.data;
 
@@ -137,7 +154,11 @@ router.post("/", async (req, res) => {
     if (scoreResult.warning) warnings.push(scoreResult.warning);
     const scores = scoreResult.data;
 
+    console.log(`[SCAN] Stage: Analysis Duration: ${Date.now() - analysisStart}ms`);
+
     const scanDuration = Date.now() - scanStartTime;
+    console.log(`[SCAN] Stage: Total Scan Duration: ${scanDuration}ms`);
+
     const overview = {
       scannedUrl: url,
       resolvedUrl: resolution.resolvedUrl,
